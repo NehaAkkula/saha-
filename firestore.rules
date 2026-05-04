@@ -1,0 +1,71 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // -------------------------------------------------------------------------
+    // HELPERS
+    // -------------------------------------------------------------------------
+    
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function getUserData() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function isAdmin() { return isSignedIn() && getUserData().role == 'Admin'; }
+    function isProjectManager() { return isSignedIn() && getUserData().role == 'Project Manager'; }
+    function isMember() { return isSignedIn() && getUserData().role == 'Team Member'; }
+    
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    
+    // -------------------------------------------------------------------------
+    // DEFAULT DENY
+    // -------------------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // USERS
+    // -------------------------------------------------------------------------
+    match /users/{uid} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isOwner(uid);
+      allow update: if isAdmin() || isOwner(uid);
+    }
+
+    // -------------------------------------------------------------------------
+    // TEAMS
+    // -------------------------------------------------------------------------
+    match /teams/{teamId} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin() || isProjectManager();
+      allow update: if isAdmin() || (isProjectManager() && resource.data.ownerId == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // PROJECTS
+    // -------------------------------------------------------------------------
+    match /projects/{projectId} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin() || isProjectManager();
+      allow update: if isAdmin() || (isProjectManager() && resource.data.managerId == request.auth.uid);
+      allow delete: if isAdmin();
+      
+      // Tasks subcollection
+      match /tasks/{taskId} {
+        allow read: if isSignedIn();
+        allow create: if isAdmin() || isProjectManager();
+        allow update: if isAdmin() || isProjectManager() || (isMember() && resource.data.assigneeId == request.auth.uid);
+        allow delete: if isAdmin() || isProjectManager();
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // NOTIFICATIONS
+    // -------------------------------------------------------------------------
+    match /notifications/{notifId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn(); // System creates, but client might trigger
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
